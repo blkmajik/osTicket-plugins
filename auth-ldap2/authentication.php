@@ -26,7 +26,6 @@ class LDAPAuthentication2
         return $this->config;
     }
 
-
     function flatten($array)
     {
         // merge multi dimentional array down into a single
@@ -41,14 +40,6 @@ class LDAPAuthentication2
             }
         }
         return $a;
-    }
-
-    function splat($what)
-    {
-        // generate a flattened array for the object passed in
-        // If it's an array flatten it, else make it a single
-        // element array.
-        return is_array($what) ? $this->flatten($what) : array($what);
     }
 
     public static function sanitize_servers($servers)
@@ -91,7 +82,7 @@ class LDAPAuthentication2
         try {
             $r = $q->query('_ldap._tcp.' . $domain, 'SRV');
         } catch (Net_DNS2_Exception $e) {
-            $this->log(sprintf($__("Errror looking up SRV records: %s"), $e));
+            $this->log(sprintf($__('Errror looking up SRV records: %s'), $e));
             return $servers;
         }
 
@@ -148,7 +139,6 @@ class LDAPAuthentication2
         }
 
         foreach ($this->getServers() as $s) {
-            $this->log(sprintf($__('Attempting to connect to %s'), $s));
             $c = ldap_connect($s);
             ldap_set_option($c, LDAP_OPT_TIMELIMIT, 5);
             ldap_set_option($c, LDAP_OPT_NETWORK_TIMEOUT, 5);
@@ -161,7 +151,7 @@ class LDAPAuthentication2
                 return $c;
             } else {
                 $err = ldap_error($c);
-                $this->log($__("Unable to bind to %s: %s", $s, $err));
+                $this->log($__('Unable to bind to %s: %s', $s, $err));
             }
         }
 
@@ -223,9 +213,9 @@ class LDAPAuthentication2
             // Single DN found. Uniquely identify a single account
             $dn = $entries[0]['dn'];
         } elseif ($entries['count'] < 1) {
-            $this->log(sprintf($__("Account does not exist: %s", $user)));
+            $this->log(sprintf($__('Account does not exist: %s', $user)));
         } elseif ($entries['count'] > 1) {
-            $this->log(sprintf($__("Too many records returned for account %s", $user)));
+            $this->log(sprintf($__('Too many records returned for account %s', $user)));
         }
         return $dn;
     }
@@ -304,7 +294,7 @@ class LDAPAuthentication2
         }
 
         $escaped = ldap_escape(utf8_decode($term), '', LDAP_ESCAPE_FILTER);
-        $filter = str_replace('{q}', $search, $config->get('search'));
+        $filter = str_replace('{q}', $escaped, $config->get('search'));
         $r = ldap_search($c, $this->getSearchBase(), $filter, $this->_attributes());
 
         if (!$r) {
@@ -333,17 +323,18 @@ class LDAPAuthentication2
         return $base;
     }
 
-    function _getValue($entry, $names)
+    function _getValue($entry, $name)
     {
-        foreach (array_filter($this->splat($names)) as $n) {
-            // Support multi-value attributes
-            foreach ($this->splat($entry[$n]) as $val) {
-                // Return the first non-bool-false value of the entries
-                if ($val) {
-                    return $val;
+        if (isset($entry[$name])) {
+            if (isset($entry[$name]['count'])) {
+                for ($i = 0; $i < $entry[$name]['count']; $i++) {
+                    if (isset($entry[$name][$i]) && $entry[$name][$i]) {
+                        return $entry[$name][$i];
+                    }
                 }
             }
         }
+        return null;
     }
 
     function _getUserInfoArray($e)
