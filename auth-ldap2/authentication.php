@@ -4,15 +4,7 @@ require_once (INCLUDE_DIR . 'class.auth.php');
 
 class LDAPAuthentication2
 {
-    /**
-     * LDAP typical schema variations
-     *
-     * References:
-     * http://www.kouti.com/tables/userattributes.htm (AD)
-     * https://fsuid.fsu.edu/admin/lib/WinADLDAPAttributes.html (AD)
-     */
     var $config;
-
     var $type = 'staff';
     var $session;
 
@@ -25,6 +17,7 @@ class LDAPAuthentication2
 
     function log($message)
     {
+        // Log to php error log with a unique session id for correlation
         error_log(sprintf('%s %s', $this->session, $message));
     }
 
@@ -33,8 +26,12 @@ class LDAPAuthentication2
         return $this->config;
     }
 
+
     function flatten($array)
     {
+        // merge multi dimentional array down into a single
+        // flat array.
+
         $a = array();
         foreach ($array as $e) {
             if (is_array($e)) {
@@ -48,11 +45,15 @@ class LDAPAuthentication2
 
     function splat($what)
     {
+        // generate a flattened array for the object passed in
+        // If it's an array flatten it, else make it a single
+        // element array.
         return is_array($what) ? $this->flatten($what) : array($what);
     }
 
     public static function sanitize_servers($servers)
     {
+        // Sanitize a list of servers into a consisten URI format.
         $retval = array();
         foreach ($servers as $srv) {
             if (preg_match('/^((ldaps?):\/\/)?([^:]+)(:(\d{1,5}))?(\/.*)?$/', $srv, $matches)) {
@@ -65,11 +66,9 @@ class LDAPAuthentication2
                     $port = $defport;
                 }
 
-                $entry = sprintf('%s://%s:%d/', $scheme, $host, $port);
-                error_log(sprintf('Sanitized entry: %s', $entry));
-                $retval[] = $entry;
+                $retval[] = sprintf('%s://%s:%d/', $scheme, $host, $port);
             } else {
-                error_log(sprintf('Invalid LDAP server entry: %s', $srv));
+                error_log(sprintf($__('Invalid LDAP server entry: %s'), $srv));
             }
         }
         return $retval;
@@ -77,8 +76,10 @@ class LDAPAuthentication2
 
     static function autodiscover($domain, $dns = array())
     {
+        // Get a list of LDAP servers based on the _ldap._tcp.*
+        // records in DNS.
+
         require_once (PEAR_DIR . 'Net/DNS2.php');
-        // TODO: Lookup DNS server from hosts file if not set
         $config = $this->getConfig();
         $q = new Net_DNS2_Resolver();
         if ($dns) {
@@ -90,11 +91,12 @@ class LDAPAuthentication2
         try {
             $r = $q->query('_ldap._tcp.' . $domain, 'SRV');
         } catch (Net_DNS2_Exception $e) {
-            // TODO: Log warning or something
+            $this->log(sprintf($__("Errror looking up SRV records: %s"), $e));
             return $servers;
         }
+
+        // Build an array that we can sort below from the SRV records
         foreach ($r->answer as $srv) {
-            // TODO: Get the actual IP of the server (?)
             $records[] = array(
                 'host' => "{$srv->target}:{$srv->port}",
                 'priority' => $srv->priority,
@@ -114,19 +116,18 @@ class LDAPAuthentication2
 
     function getServers()
     {
+        // Get a sanitized list of servers that we can contact.
+        // The order of the servers is their priority
         $config = $this->getConfig();
         $entries = $config->get('servers');
         if ($entries) {
             $entries = preg_split('/\s+/', $entries);
-            foreach ($entries as $entry) {
-                $this->log(sprintf('Found server entry: %s', $entry));
-            }
         } else {
             if ($domain = $this->getConfig()->get('domain')) {
                 $dns = preg_split('/,?\s+/', $this->getConfig()->get('dns'));
                 return self::autodiscover($domain, array_filter($dns));
             } else {
-                $this->log('Unable to determine servers list');
+                $this->log($__('Unable to determine servers list'));
                 $entries = array();
             }
         }
@@ -147,7 +148,7 @@ class LDAPAuthentication2
         }
 
         foreach ($this->getServers() as $s) {
-            $this->log(sprintf('Attempting to connect to %s', $s));
+            $this->log(sprintf($__('Attempting to connect to %s'), $s));
             $c = ldap_connect($s);
             ldap_set_option($c, LDAP_OPT_TIMELIMIT, 5);
             ldap_set_option($c, LDAP_OPT_NETWORK_TIMEOUT, 5);
@@ -158,10 +159,13 @@ class LDAPAuthentication2
                 // Connection successful
                 $connection = $c;
                 return $c;
+            } else {
+                $err = ldap_error($c);
+                $this->log($__("Unable to bind to %s: %s", $s, $err));
             }
         }
 
-        $this->log('Unable to find a connection');
+        $this->log($__('Unable to find a connection'));
         return false;
     }
 
@@ -171,7 +175,7 @@ class LDAPAuthentication2
     function _bind($connection)
     {
         if (!$connection) {
-            $this->log('_bind called without a valid connection');
+            $this->log($__('_bind called without a valid connection'));
             return false;
         }
         $config = $this->getConfig();
@@ -179,20 +183,22 @@ class LDAPAuthentication2
             $pw = Crypto::decrypt($config->get('bind_pw'), SECRET_SALT, $config->getNamespace());
             if (!($r = ldap_bind($connection, $dn, $pw))) {
                 $err = ldap_error($connection);
-                $this->log(sprintf('Error binding as user: %s', $err));
-            } else {
-                $this->log('Connection bound successfully');
+                $this->log(sprintf($__('Error binding as user: %s'), $err));
             }
             unset($pw);
         } else {
             if (!($r = ldap_bind($connection))) {
                 $err = ldap_error($connection);
-                $this->log(sprintf('Error during anonymous binding: %s', $err));
+                $this->log(sprintf($__('Error during anonymous binding: %s'), $err));
             }
         }
         return $r;
     }
 
+    /**
+     * Find the DN of a given user name.
+     * Zero or multiple records return false.
+     */
     function _finddn($user)
     {
         $dn = null;
@@ -209,7 +215,7 @@ class LDAPAuthentication2
         $escaped = ldap_escape(utf8_decode($user), '', LDAP_ESCAPE_FILTER);
         $filter = str_replace('{q}', $escaped, $config->get('lookup'));
         if (!($r = ldap_search($c, $config->get('search_base'), $filter))) {
-            $this->log(sprintf('User [%s] filter failed: %s in base %s', $user, $filter, $config->get('search_base')));
+            $this->log(sprintf($__('User [%s] filter failed: %s in base %s'), $user, $filter, $config->get('search_base')));
             return null;
         }
         $entries = ldap_get_entries($c, $r);
@@ -217,13 +223,9 @@ class LDAPAuthentication2
             // Single DN found. Uniquely identify a single account
             $dn = $entries[0]['dn'];
         } elseif ($entries['count'] < 1) {
-            // account does not exist
-            return null;
+            $this->log(sprintf($__("Account does not exist: %s", $user)));
         } elseif ($entries['count'] > 1) {
-            // Login is not unique
-            // TODO log something here for error finding
-            // error_log();
-            return null;
+            $this->log(sprintf($__("Too many records returned for account %s", $user)));
         }
         return $dn;
     }
@@ -239,15 +241,15 @@ class LDAPAuthentication2
 
         // Find the user if they exist
         if (!($dn = $this->_finddn($username))) {
-            $this->log(sprintf('No such user: %s', $username));
+            $this->log(sprintf($__('No such user: %s'), $username));
             return null;
         }
 
         $c = $this->getConnection();
         $r = ldap_bind($c, $dn, $password);
         if (!$r) {
-            $this->log(sprintf('LDAP failure: %s', ldap_error($c)));
-            $this->log(sprintf('login failed for: %s', $dn));
+            $this->log(sprintf($__('LDAP failure: %s'), ldap_error($c)));
+            $this->log(sprintf($__('login failed for: %s'), $dn));
             return null;
         }
 
@@ -256,7 +258,7 @@ class LDAPAuthentication2
 
     function _attributes()
     {
-        // Consisten function to get the LDAP attributes
+        // Consistent function to get the LDAP attributes
         // that we care about.
         $config = $this->getConfig();
 
@@ -296,7 +298,6 @@ class LDAPAuthentication2
     {
         $config = $this->getConfig();
         $c = $this->getConnection();
-        // TODO: Include bind information
         $users = array();
         if (!$this->_bind($c)) {
             return $users;
